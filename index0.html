@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+  <head>
+    <meta charset="utf8">
+	<title></title>
+	<meta charset="utf-8">
+	<!--d3.js v6を採用しようとしたが、IE11はv4しか対応していない-->
+	<script src="https://d3js.org/d3.v4.min.js"></script>
+	<style>
+		body { font-family: "ヒラギノ角ゴ Pro W3", "Hiragino Kaku Gothic Pro", "メイリオ", Meiryo, Osaka, "ＭＳ Ｐゴシック", "MS PGothic", sans-serif; }
+		h1,h2,p { padding: 6px; text-align: center; }
+		svg { border:1px; background-color: white; text-align:left; }
+		path { fill:white; stroke:black; stroke-width:0.25; }
+		.tooltip {
+			position:absolute;
+			pointer-events: none;
+			visibility: visible;
+			padding: 5px 12px 10px;
+			color : #666;
+			z-index:9998;
+		}
+		.infowindow {
+			position:absolute;
+			pointer-events: none;
+			padding: 5px 12px 10px;
+			width: 300px;
+			height: 210px;
+			background: #fff;
+			-webkit-box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.4);
+			-moz-box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.4);
+			box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.4);
+			border-radius: 5px;
+			color : #666;
+			z-index:9997;
+		}
+		.bar {
+			position:absolute;
+			pointer-events: none;
+			width: 2px;
+			background: magenta;
+			z-index:9999;
+		}
+		.axis {
+			position:absolute;
+			pointer-events: none;
+			background: black;
+			text-anchor: middle;
+			z-index:9999;
+		}
+		.label { position:absolute; pointer-events: none; font-size: 8px; color: black; }
+		.check { font-size:x-large; position: fixed; top: 17%; right:7%; border: 2px solid red; }
+		.checkRiver { font-size:x-large; position: fixed; top: 10%; right:7%; border: 2px solid red; }
+		.river { pointer-events: none; }
+		.station { pointer-events: none; }
+	</style>
+  </head>
+  <body>
+	<h1>淀川区　東淀川区　町丁目マップ</h1>
+	<h2>町丁目をクリックするとデータが表示されます</h2>
+	<p>出典　<a href="https://www.city.osaka.lg.jp/shimin/page/0000006893.html">住民基本台帳人口</a>　(注:NaNは秘匿処理)</p>
+	<script>
+	//
+	//-----第２段階　町丁目ごとにデータを格納したCSV読み込み
+	//変数初期化
+	var geojsonfile = "yodogawa_higashiyodogawa.geojson";  //eStatから取得した境界データshpをQJISでgeojsonに変換したファイル
+	var fontSize = "20px";
+	var csvdata = [];  //CSV格納先
+	//淀川区と東淀川区の住民基本台帳URL（大阪市HP）
+	var data_a_url="https://www.city.osaka.lg.jp/shimin/cmsfiles/contents/0000006/6893/(0303)02-12_jyu-ki(yodogawa).csv";
+	var data_b_url="https://www.city.osaka.lg.jp/shimin/cmsfiles/contents/0000006/6893/(0303)02-13_jyu-ki(higashiyodogawa).csv";
+	//CSV読み込み
+	//data_a CSV読み込み
+	d3.csv(data_a_url, function(data_a){
+		data_a.forEach(function(element_a){
+			if (element_a.基準日!=""){ //これをつけないとcsvが999行の場合、全部読んでしまう
+				csvdata.push(element_a);
+			}
+		})
+		//console.log(csvdata_a); //確認
+	});
+	//data_b CSV読み込み
+	d3.csv(data_b_url, function(data_b){
+		data_b.forEach(function(element_b){
+			if (element_b.基準日!=""){
+				csvdata.push(element_b);
+			}
+		})
+		//console.log(csvdata_b); //確認
+	});
+	//
+	//------第３段階　町丁目境界データgeojsonを読み込み描画する
+	//描画エリア設定
+	var width  = window.innerWidth;
+	var height = window.innerHeight;
+	//svg
+	var svg = d3.select("body").append("svg").attr("width", width).attr("height", height);
+	var projection;
+	//町丁目名、時刻を表示するツールチップを設定（コメントアウト分はSVGは改行できない）
+	var tooltip1 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip2 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip3 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip4 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip5 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip6 = d3.select("body").append("div").attr("class", "tooltip");
+	var tooltip7 = d3.select("body").append("div").attr("class", "tooltip");
+	var infowindow = d3.select("body").append("rect").attr("class", "infowindow");
+	//棒グラフ描画用（０歳～１００歳以上年齢別データ格納）
+	var barElements = [];
+	for (var i=0;i<101;i++){
+		barElements[i] = d3.select("body").append("rect").attr("class", "bar");
+	}
+	//X軸　描画用
+	var axisX = d3.select("body").append("rect").attr("class", "axis");
+	var labelX = [];
+	var textX = ["0","10","20","30","40","50","60","70","80","90","100","歳"]; //X軸ラベル
+	for (var i in textX){
+		labelX[i] = d3.select("body").append("div").attr("class", "label").text(textX[i]);
+	}
+	//Y軸　描画用
+	var axisY = d3.select("body").append("rect").attr("class", "axis");
+	var labelY = [];
+	var textY = [];
+	labelY[0] = d3.select("body").append("div").attr("class", "label");
+	labelY[1] = d3.select("body").append("div").attr("class", "label");
+	//10-最大200(西区南堀江４丁目最大208人)まで20個のlabelY[2]-labelY[21]を用意しておく
+	for (var i=2;i<22;i++){
+		labelY[i] = d3.select("body").append("rect").attr("class", "label");
+	}
+	//町丁目geojson読み込み
+	d3.json(geojsonfile, function(json){
+		//描画レスポンシブ対応 中心と移動も画面サイズで自動調整
+		projection = d3.geoMercator()
+	    .fitExtent([[0, 0],[width, height-100]], json);
+		//河川表示　ただし、読み込んだ当初はvisibility hiddenで隠している
+		//国土数値情報　河川をQGISを用いて大阪市でクリッピング
+		//geojson読み込み　ロードを確実にするため、ここに書いている
+		var lonlat;
+		var xy;
+		d3.json("river_osakacity.geojson", function(json){
+			//path設定
+			var path = d3.geoPath(projection);
+			//河川　描画
+			svg.append("g").selectAll("path")
+				.data(json.features)
+				.enter()
+				.append("path")
+				.attr("class", "river")
+				.attr("visibility", "hidden")
+				.attr("d", path)
+				.style("fill", "none")
+				.style("stroke-width", "5")
+				.style("stroke", "#1e90ff");
+			//河川名　描画
+			svg.append("g").selectAll("text")
+				.data(json.features)
+				.enter()
+				.append("text")
+				.attr("class", "river")
+				.attr("visibility", "hidden")
+				.style("font-size", "14px")
+				.style("text-anchor", "middle")
+				.attr("x", function(d){
+					lonlat = d.geometry.coordinates[0];
+					xy = projection(lonlat[0]);
+					return xy[0];
+				})
+				.attr("y", function(d){
+					lonlat = d.geometry.coordinates[0];
+					xy = projection(lonlat[0]);
+					return xy[1]-10;
+				})
+				.text(function(d){
+					return d.properties.W05_004;
+				});
+		});
+		//駅名表示　ただし、読み込んだ当初はvisibility hiddenで隠している
+		//国土数値情報　鉄道をQGISを用いて大阪市でクリッピング
+		//geojson読み込み　ロードを確実にするため、ここに書いている
+		var lonlat;
+		var xy;
+		d3.json("station_osakacity.geojson", function(json){
+			//path設定
+			var path = d3.geoPath(projection);
+			//駅　描画
+			svg.append("g").selectAll("path")
+				.data(json.features)
+				.enter()
+				.append("path")
+				.attr("class", "station")
+				.attr("visibility", "hidden")
+				.attr("d", path)
+				.style("stroke-width", "5")
+				.style("stroke", "#ff4500");
+			//駅名　描画
+			svg.append("g").selectAll("text")
+				.data(json.features)
+				.enter()
+				.append("text")
+				.attr("class", "station")
+				.attr("visibility", "hidden")
+				.style("font-size", "14px")
+				.style("text-anchor", "middle")
+				.attr("x", function(d){
+					lonlat = d.geometry.coordinates[0];
+					xy = projection(lonlat[0]);
+					return xy[0];
+				})
+				.attr("y", function(d){
+					lonlat = d.geometry.coordinates[0];
+					xy = projection(lonlat[0]);
+					return xy[1]-10;
+				})
+				.text(function(d){
+					return d.properties.駅名;
+				});
+		});
+		//町丁目　描画
+		//path設定
+		var path = d3.geoPath(projection);
+		//描画、マウス反応
+		svg.append("g").selectAll("path")
+		    .data(json.features)
+			.enter()
+			.append("path")
+			.attr("d", path)
+			.style("fill", function(d,i){
+				if(d.properties.JINKO=="0"){
+					return "#EEEEEE";
+				}
+				return "#CEF6CE";
+			})
+			.on('click', function(d){
+				//alert(Object.keys(csvdata[0]));
+				//alert(csvdata[0]["町丁目名"]);
+				//const result = csvdata.find((v) => v.町丁目名 === d.properties.S_NAME);
+				//alert(result.町丁目名);
+			})
+			.on('mouseover', function(d){
+				d3.select(this)
+				.style("fill","pink");
+				//画面端になるとinfowindow内文字が見えなくなるのを防ぐ(画面半分超えると座標-350) 3項演算子
+				var posX = event.pageX > innerWidth/2 ? event.pageX - 400 : event.pageX+50;
+				var posY = event.pageY > innerHeight/2 ? event.pageY - 50 : event.pageY;
+				//infowindowの下地と枠
+				infowindow.style("left", (posX)+"px")
+				          .style("top",  (posY)+"px");
+				//町丁目名、情報をtooltipに表示
+				//マウスオーバーしているgeojsonの町丁目名と等しい町丁目名のレコードをcsvdataから検索する
+				//filterで町丁目名一致を返すと、男、女、計の３つ配列を返す
+				//よって、[2]として計を読み込む
+				console.log(d.properties.S_NAME);
+				var result = csvdata.filter(function (v) {
+					return v.町丁目名 === d.properties.S_NAME;
+				})[2];
+				//console.log(result);
+				//後でindexでデータ指定したいため、あえて連想配列を配列に格納しなおす。
+				var result_array = [];
+				for (var key in result){
+					result_array.push(Number(result[key]));
+				}
+				//infowindow描画
+				var info1 = result.町丁目名;
+				var info2 = "人口:" + result.総数 + "人 (" + result.基準日 + "現在)";
+				var info3 = "世帯:" + result.世帯数 + "世帯";
+				var num1  = Number(result["０歳"])+Number(result["１歳"])+Number(result["２歳"])+Number(result["３歳"])+Number(result["４歳"])
+				           +Number(result["５歳"])+Number(result["６歳"])+Number(result["７歳"])+Number(result["８歳"])+Number(result["９歳"])
+						   +Number(result["１０歳"])+Number(result["１１歳"])+Number(result["１２歳"])+Number(result["１３歳"])+Number(result["１４歳"])
+						   +Number(result["１５歳"])+Number(result["１６歳"])+Number(result["１７歳"]);
+				var info4 = " 0~17歳:" + num1 + "人";
+				var num2  = Number(result["１８歳"])+Number(result["１９歳"])
+				           +Number(result["２０歳"])+Number(result["２１歳"])+Number(result["２２歳"])+Number(result["２３歳"])+Number(result["２４歳"])
+				           +Number(result["２５歳"])+Number(result["２６歳"])+Number(result["２７歳"])+Number(result["２８歳"])+Number(result["２９歳"])
+						   +Number(result["３０歳"])+Number(result["３１歳"])+Number(result["３２歳"])+Number(result["３３歳"])+Number(result["３４歳"])
+						   +Number(result["３５歳"])+Number(result["３６歳"])+Number(result["３７歳"])+Number(result["３８歳"])+Number(result["３９歳"])
+						   +Number(result["４０歳"])+Number(result["４１歳"])+Number(result["４２歳"])+Number(result["４３歳"])+Number(result["４４歳"])
+				           +Number(result["４５歳"])+Number(result["４６歳"])+Number(result["４７歳"])+Number(result["４８歳"])+Number(result["４９歳"])
+						   +Number(result["５０歳"])+Number(result["５１歳"])+Number(result["５２歳"])+Number(result["５３歳"])+Number(result["５４歳"])
+						   +Number(result["５５歳"])+Number(result["５６歳"])+Number(result["５７歳"])+Number(result["５８歳"])+Number(result["５９歳"])
+						   +Number(result["６０歳"])+Number(result["６１歳"])+Number(result["６２歳"])+Number(result["６３歳"])+Number(result["６４歳"]);
+				var info5 = "18~64歳:" + num2 + "人";
+				var num3  = Number(result["６５歳"])+Number(result["６６歳"])+Number(result["６７歳"])+Number(result["６８歳"])+Number(result["６９歳"])
+				           +Number(result["７０歳"])+Number(result["７１歳"])+Number(result["７２歳"])+Number(result["７３歳"])+Number(result["７４歳"])
+						   +Number(result["７５歳"])+Number(result["７６歳"])+Number(result["７７歳"])+Number(result["７８歳"])+Number(result["７９歳"])
+						   +Number(result["８０歳"])+Number(result["８１歳"])+Number(result["８２歳"])+Number(result["８３歳"])+Number(result["８４歳"])
+						   +Number(result["８５歳"])+Number(result["８６歳"])+Number(result["８７歳"])+Number(result["８８歳"])+Number(result["８９歳"])
+				           +Number(result["９０歳"])+Number(result["９１歳"])+Number(result["９２歳"])+Number(result["９３歳"])+Number(result["９４歳"])
+						   +Number(result["９５歳"])+Number(result["９６歳"])+Number(result["９７歳"])+Number(result["９８歳"])+Number(result["９９歳"])+Number(result["１００歳以上"]);
+				var info6 = "65~100歳以上:" + num3 + "人";
+				var num4  = Number(result["７５歳"])+Number(result["７６歳"])+Number(result["７７歳"])+Number(result["７８歳"])+Number(result["７９歳"])
+						   +Number(result["８０歳"])+Number(result["８１歳"])+Number(result["８２歳"])+Number(result["８３歳"])+Number(result["８４歳"])
+						   +Number(result["８５歳"])+Number(result["８６歳"])+Number(result["８７歳"])+Number(result["８８歳"])+Number(result["８９歳"])
+				           +Number(result["９０歳"])+Number(result["９１歳"])+Number(result["９２歳"])+Number(result["９３歳"])+Number(result["９４歳"])
+						   +Number(result["９５歳"])+Number(result["９６歳"])+Number(result["９７歳"])+Number(result["９８歳"])+Number(result["９９歳"])+Number(result["１００歳以上"]);
+				var info7 = "(75~100歳以上:" + num4 + "人)※重複";
+				tooltip1.style("font-weight", "bold")
+				        .style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY)+"px")
+					    .text(info1);
+				tooltip2.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+30)+"px")
+					    .text(info2);
+				tooltip3.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+60)+"px")
+					    .text(info3);
+				tooltip4.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+90)+"px")
+					    .text(info4);
+				tooltip5.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+120)+"px")
+					    .text(info5);
+				tooltip6.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+150)+"px")
+					    .text(info6);
+				tooltip7.style("font-size", fontSize)
+				        .style("left", (posX)+"px")
+					    .style("top",  (posY+180)+"px")
+					    .text(info7);
+				//棒グラフ　描画
+				var arr = []; //あとでY軸書くときに使う用
+				for (var i=7;i<108;i++){ //このiはresult_arrayのインデックス
+					//barElements[i-7]を忘れないように
+					barElements[i-7].style("left", (posX+i*3)+"px") //隙間をあけるため＊３
+					              .style("top", ((posY-20) - result_array[i]*2)+"px") //下向きに描画するため、topを上に移動させる
+					              .style("height", (result_array[i]*2)+"px");
+					//後でY軸書くときに使う
+					arr.push(result_array[i]);
+				}
+				//目盛り　描画
+				//X軸
+				axisX.style("left", (posX+20)+"px")
+					 .style("top", (posY-18)+"px")
+					 .style("width", "303px")
+					 .style("height", "2px");
+				//X軸ラベル　10歳きざみ年齢
+				for( var i in textX){
+					labelX[i].style("left", ((posX+18)+i*30)+"px")
+							 .style("top", ((posY-15)+"px"));
+				}
+				//Y軸　最大値によって可変させる(高さ固定で描画するとうっとおしい）
+				//0歳~100歳のうち最大値取得 少し上でarr配列を定義済
+				var max = arr.reduce(function(a, b){
+					return Math.max(a, b);
+				});
+				axisY.style("left", (posX+18)+"px")
+					 .style("top", ((posY-20) - max*2)+"px")
+					 .style("width", "2px")
+					 .style("height", max*2+4+"px");
+				//Y軸ラベル　先に単位（人）、次に最大値
+				textY[0] = "人";
+				textY[1] = String(max);
+				var p = Math.floor(max /10); //最大値を10で割り小数点除去、結果10きざみでラベル作成数確保
+				//10きざみラベル　可変
+				textY2 = [];
+				for(var i=0;i<p;i++){
+					textY2[i] = String((i+1)*10); //10からラベル表示するのでi+1に注意
+				}
+				//描画　単位、最大値は固定だが、残りラベルは等間隔なので２つと残りはY座標計算気をつける
+				labelY[0].text(textY[0]).style("left", ((posX-4)+"px")).style("top", ((posY-45) - max*2)+"px");　//単位　人
+				labelY[1].text(textY[1]).style("left", ((posX-4)+"px")).style("top", ((posY-28) - max*2)+"px"); //最大値
+				//描画　10きざみラベル
+				for(var i=0;i<p;i++){
+					labelY[i+2].text(textY2[i]).style("left", ((posX-4)+"px")).style("top", (posY-20)-(i+1)*20+"px");
+				}
+				//labelY[p]-[21]までが残像残るので、消す
+				for(var i=p+2;i<22;i++){
+					labelY[i].text("").style("left", "0px").style("top", "0px");
+				}
+			})
+			.on('mouseout', function(d,i){
+				d3.select(this)
+				.style("fill", function(d,i){
+					if(d.properties.JINKO=="0"){
+						return "#EEEEEE";
+					}
+					return "#CEF6CE";
+				})
+			})
+	});
+	
+	//チェックボックスのON/OFFに応じて、河川を表示ON/OFF
+	function drawRiver(){
+		//チェックをはずしていたら河川　消去
+		if(!document.checkbox1.elements[0].checked){
+			svg.selectAll(".river").attr("visibility", "hidden");
+		} else {
+			svg.selectAll(".river").attr("visibility", "visible");
+		}
+	}
+	
+	//チェックボックスのON/OFFに応じて、駅と駅名を表示ON/OFF
+	function drawStation(){
+		//チェックをはずしていたら駅名　消去
+		if(!document.checkbox2.elements[0].checked){
+			svg.selectAll(".station").attr("visibility", "hidden");
+		} else {
+			svg.selectAll(".station").attr("visibility", "visible");
+		}
+	}
+	</script>
+	<form name="checkbox1" class="checkRiver">
+		<label><input type="checkbox" onclick="drawRiver()">河川　表示　</label>
+	</form>
+	<form name="checkbox2" class="check">
+		<label><input type="checkbox" onclick="drawStation()">鉄道駅　表示　</label>
+	</form>
+  </body>
+</html>
